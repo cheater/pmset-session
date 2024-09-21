@@ -214,8 +214,6 @@ if($opt->verbose && $opt->verbose >= 2) {
 
 
 
-# Do stuff you need the lock for, do something with the file, etc...
-
 # Syntax explanation: "given ... when" is just "switch ... case" in Perl
 if("start_session" eq $opt->mode) {
   open(my $touchfh, ">", $pid_file) or die "Cannot create PID file";
