@@ -12,6 +12,14 @@ Put `pmset-session` in your `$PATH`. If you're going to be using
 must be added to `$PATH` before the relevant code in `.zprofile` executes, e.g.
 by adding it to `.zshenv`.
 
+You almost certainly want to make it possible for your user to `sudo pmset`
+without a password prompt. In order to do this, run the following code in your
+terminal, replacing `joe` with your user name:
+
+```zsh
+sudo zsh -c 'echo "joe ALL=(ALL) NOPASSWD: /usr/bin/pmset" > /private/etc/sudoers.d/pmset'
+```
+
 
 # Usage
 

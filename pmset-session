@@ -78,6 +78,13 @@ automatically set power management options while you are connected to macOS via
 ssh.
 
 
+You almost certainly want to make it possible for your user to `sudo pmset`
+without a password prompt. In order to do this, run the following code in your
+terminal, replacing `joe` with your user name:
+
+sudo zsh -c 'echo "joe ALL=(ALL) NOPASSWD: /usr/bin/pmset" > /private/etc/sudoers.d/pmset'
+
+
 Add this code to ~/.zshenv:
 
 # Add ~/bin to $PATH. Note we still have to do it in .zshrc because this
