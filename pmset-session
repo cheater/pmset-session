@@ -12,7 +12,7 @@ use experimental 'signatures'; # Enable syntax where functions have parameters
 use Fcntl ':flock'; # Import LOCK_* constants
 use Getopt::Long::Descriptive;
 use File::Path qw(make_path);
-use IPC::Cmd qw[can_run];
+use IPC::Cmd qw(can_run);
 use Time::HiRes qw(ualarm);
  
 
@@ -31,6 +31,7 @@ make_path($pid_dir);
 my $max_lock_wait = 5;    # Seconds to wait.
 my $max_lock_wait_us = int($max_lock_wait * $mil); # Cast to int miliseconds
 if ($max_lock_wait_us <= $mil) { die "max_lock_wait must be >= 1s + 1us."; }
+my $test_lock_wait =  0;  # Debug / testing: artificially hold lock for this
                           # many seconds, or 0 for no wait.
 
 
