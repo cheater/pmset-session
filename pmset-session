@@ -13,6 +13,7 @@ use Fcntl ':flock'; # Import LOCK_* constants
 use Getopt::Long::Descriptive;
 use File::Path qw(make_path);
 use IPC::Cmd qw[can_run];
+use Time::HiRes qw(ualarm);
  
 
 
@@ -21,14 +22,15 @@ use IPC::Cmd qw[can_run];
 
 $^O eq "darwin" or die "This program only works on macOS.";
 can_run("pmset") or die "Cannot find pmset command.";
+my $mil = 1000000;
 my $dotpmset = '/tmp/.pmset/';
 make_path($dotpmset);
 my $lockfile = $dotpmset . 'pmset.lock';
 my $pid_dir = $dotpmset . 'pmset.lock.d/';
 make_path($pid_dir);
 my $max_lock_wait = 5;    # Seconds to wait.
-if ($max_lock_wait <= 1) { die "max_lock_wait must be > 1."; }
-my $test_lock_wait =  0;  # Debug / testing: artificially hold lock for this
+my $max_lock_wait_us = int($max_lock_wait * $mil); # Cast to int miliseconds
+if ($max_lock_wait_us <= $mil) { die "max_lock_wait must be >= 1s + 1us."; }
                           # many seconds, or 0 for no wait.
 
 
@@ -192,13 +194,13 @@ sub try_lock($timeout) {
       $alarm++;
       flock($fh, LOCK_UN);
     };
-    alarm $timeout;
+    ualarm(int($timeout * $mil));
     # Open the file for appending.
     open($fh, '>>', $lockfile) or die "Could not open lockfile '$lockfile': $!";
     
     # Get exclusive lock (will block until it does)
     flock($fh, LOCK_EX) or die "Could not lock lockfile '$lockfile': $!";
-    alarm 0;
+    ualarm(0);
   };
 
   if ($alarm) { return 1; }

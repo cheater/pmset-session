@@ -91,10 +91,3 @@ case e.g. your computer ever crashes or loses power. Note that this will not
 include PID files where the process ID is now being used by some other,
 unrelated process. You can use `pmset-session -o $$` to remove all PID files
 and start a session only for your current shell.
-
-
-# Known bugs
-
-There is a known bug wherein if you go into the source of `pmset-session` and
-set `$max_lock_wait` to a fractional value between 1 and 2 it will ignore a
-failure to acquire the lock and continue executing. So don't do that.
