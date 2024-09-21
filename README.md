@@ -79,7 +79,9 @@ if ! [ -z "$SSH_CLIENT" ] && [[ "$(uname)" == "Darwin" ]]; then
 ```
 
 You can use `pmset-session -c` from the command line to clean up PID files in
-case e.g. your computer ever crashes or loses power.
+case e.g. your computer ever crashes or loses power. Note that this will not
+include PID files where the process ID is now being used by some other,
+unrelated process. You'll have to delete those manually.
 
 
 # Known bugs
