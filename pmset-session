@@ -243,7 +243,7 @@ if("start_session" eq $opt->mode) {
 } elsif ("clean_up" eq $opt->mode) {
   cleanup();
 } else {
-  die "Unknown mode: '$opt->mode'\n\n" . $usage->text;
+  die "Unknown mode: '" . $opt->mode . "'\n\n" . $usage->text;
 }
 
 
