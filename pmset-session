@@ -37,8 +37,8 @@ my $test_lock_wait =  0;  # Debug / testing: artificially hold lock for this
 # Handle command line
 
 my $u1 = "%c - turns off sleep as long as registered PIDs are alive\n";
-my $u2 = "Usage: %c [-s|-e|-c] [-v] <PID>\n";
-my $u3 = "Note: you must specify one of -s or -e or -c and the PID.\n";
+my $u2 = "Usage: %c [-s|-e|-c|-o] [-v] <PID>\n";
+my $u3 = "Note: you must specify one of -s or -e or -c or -o and the PID.\n";
 my $u4 = "Typical usage from zsh or bash: %c -s \$\$; (later) %c -e \$\$\n";
 my $u5 = "Options:\n";
 my ($opt, $usage) = describe_options(
@@ -46,7 +46,9 @@ my ($opt, $usage) = describe_options(
   [ "mode" => hidden => { required => 1, one_of => [
     [ "start-session|s" => "Start session."                                  ],
     [ "end-session|e"   => "End session, restore sleep time if none left."   ],
-    [ "clean-up|c"      => "Clean up dead sessions. Also done on -s and -e." ],
+    [ "clean-up|c"      => "Clean up dead sessions. Also done on -s and " .
+                           "-e, and implicitly -o."                          ],
+    [ "only-this-session|o" => "Remove all session files except this one."   ],
   ] } ],
   [],
   [ 'verbose|v+', "Verbosity, use multiple times to increase level."    ],
@@ -216,11 +218,8 @@ if($opt->verbose && $opt->verbose >= 2) {
 
 # Syntax explanation: "given ... when" is just "switch ... case" in Perl
 if("start_session" eq $opt->mode) {
-  open(my $touchfh, ">", $pid_file) or die "Cannot create PID file";
-  close($touchfh) or die "Cannot write PID file";
-  system('sudo pmset -b sleep 0');
-  system('sudo pmset -b disablesleep 1');
-  cleanup();
+  start_session();
+  cleanup(0);
 } elsif ("end_session" eq $opt->mode) {
   if ( -e $pid_file ) {
     if ( -f $pid_file ) {
@@ -233,13 +232,16 @@ if("start_session" eq $opt->mode) {
   } else {
     warn "No existing PID file to be deleted for PID: '$pid'";
   }
-  if(not cleanup()) {
+  if(not cleanup(0)) {
     vp(1, "Found no remaining alive PIDs. Resetting sleep options.\n");
     system('sudo pmset -b sleep 5'); # Restore to 5 minutes
     system('sudo pmset -b disablesleep 0');
   }
 } elsif ("clean_up" eq $opt->mode) {
-  cleanup();
+  cleanup(0);
+} elsif ("only_this_session" eq $opt->mode) {
+  cleanup(1); # Delete all files in PID dir
+  start_session();
 } else {
   die "Unknown mode: '" . $opt->mode . "'\n\n" . $usage->text;
 }
@@ -247,11 +249,29 @@ if("start_session" eq $opt->mode) {
 
 
 
-# Delete PID files for processes that are gone and return 1 if any alive
-# processes remain or 0 if no alive processes remain.
+# Start a session
 
-sub cleanup {
+sub start_session() {
+  vp(1, "Registering this session...\n");
+  open(my $touchfh, ">", $pid_file) or die "Cannot create PID file";
+  close($touchfh) or die "Cannot write PID file";
+  system('sudo pmset -b sleep 0');
+  system('sudo pmset -b disablesleep 1');
+}
+
+
+
+
+# If the first argument is 0, delete PID files for processes that are gone and
+# return 1 if any alive processes remain or 0 if no alive processes remain. If
+# the first argument is 1, delete all PID files.
+
+sub cleanup($delete_all) {
   vp(1, "Running cleanup...\n");
+  if ($delete_all) {
+    vp(1, "Removing all files in PID directory...\n");
+  }
+
   opendir(my $dh, $pid_dir) or die "Can't opendir() PID dir '$pid_dir': $!";
 
   # Syntax explanation for the below code:
@@ -279,7 +299,9 @@ sub cleanup {
 
     if ($alive) {
       $found_alive = 1;
-    } else {
+    } 
+
+    if (not $alive or $delete_all) {
       $full_path = $pid_dir . $found_pid;
       if (unlink($full_path)) {
         vp(1, "Deleted PID file: '$found_pid'\n");
