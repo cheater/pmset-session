@@ -1,0 +1,3 @@
+# Add ~/bin to $PATH. Note we still have to do it in .zshrc because this
+# addition will be at the end of $PATH once all dotfiles are done being read.
+PATH="$HOME/bin:$PATH"

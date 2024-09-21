@@ -1,0 +1,319 @@
+#!/usr/bin/perl
+
+# pmset-session
+#
+# This program can be used to keep a macbook with a closed lid from sleeping as
+# long as there are existing ssh sessions registered with pmset-session.
+
+use v5.34.1;
+use warnings;
+
+use experimental 'signatures'; # Enable syntax where functions have parameters
+use Fcntl ':flock'; # Import LOCK_* constants
+use Getopt::Long::Descriptive;
+use File::Path qw(make_path);
+use IPC::Cmd qw[can_run];
+ 
+
+
+
+# Main constants and initialization
+
+$^O eq "darwin" or die "This program only works on macOS.";
+can_run("pmset") or die "Cannot find pmset command.";
+my $dotpmset = '/tmp/.pmset/';
+make_path($dotpmset);
+my $lockfile = $dotpmset . 'pmset.lock';
+my $pid_dir = $dotpmset . 'pmset.lock.d/';
+make_path($pid_dir);
+my $max_lock_wait = 5;    # Seconds to wait.
+if ($max_lock_wait <= 1) { die "max_lock_wait must be > 1."; }
+my $test_lock_wait =  0;  # Debug / testing: artificially hold lock for this
+                          # many seconds, or 0 for no wait.
+
+
+
+
+# Handle command line
+
+my $u1 = "%c - turns off sleep as long as registered PIDs are alive\n";
+my $u2 = "Usage: %c [-s|-e|-c] [-v] <PID>\n";
+my $u3 = "Note: you must specify one of -s or -e or -c and the PID.\n";
+my $u4 = "Typical usage from zsh or bash: %c -s \$\$; (later) %c -e \$\$\n";
+my $u5 = "Options:\n";
+my ($opt, $usage) = describe_options(
+  $u1 . $u2 . "\n" . $u3 . "\n" . $u4 . "\n" . $u5,
+  [ "mode" => hidden => { required => 1, one_of => [
+    [ "start-session|s" => "Start session."                                  ],
+    [ "end-session|e"   => "End session, restore sleep time if none left."   ],
+    [ "clean-up|c"      => "Clean up dead sessions. Also done on -s and -e." ],
+  ] } ],
+  [],
+  [ 'verbose|v+', "Verbosity, use multiple times to increase level."    ],
+  [ 'help|h+',
+    "Show usage message and exit. Use multiple times for more help.",
+    { shortcircuit => 1 }
+  ],
+);
+
+print($usage->text) if $opt->help;
+if($opt->help && $opt->help > 1) {
+  print_extra_help();
+}
+if($opt->help && $opt->help > 2) {
+  print "\nRemember: you are not alone. ";
+  print "Don't be afraid to reach out for help.\n";
+}
+exit if $opt->help;
+
+sub print_extra_help() {
+  print <<'END'
+
+Extended help
+
+pmset-session is meant to be used with .zprofile and .zshenv in order to
+automatically set power management options while you are connected to macOS via
+ssh.
+
+
+Add this code to ~/.zshenv:
+
+# Add ~/bin to $PATH. Note we still have to do it in .zshrc because this
+# addition will be at the end of $PATH once all dotfiles are done being read.
+PATH="$HOME/bin:$PATH"
+
+
+Add this code to ~/.zprofile. Note that it also integrates caffeinate, but you
+don't need it to use pmset-session:
+
+# Only execute if logging in via ssh into a mac
+if ! [ -z "$SSH_CLIENT" ] && [[ "$(uname)" == "Darwin" ]]; then
+
+  # We must run $(caffeinate > /dev/null &) because it is the only version of
+  # spawning caffeinate in the background that starts up quietly, doesn't
+  # prevent you from quitting the shell, and exits automatically once you quit.
+  #
+  # If you use caffeinate >/dev/null &, you get the following output:
+  #
+  # Last login: Sun Sep 15 00:43:24 2024 from 1.2.3.4
+  # [2] 57056
+  # ~ %
+  # zsh: you have running jobs.
+  # ~ %
+  # zsh: warning: 1 jobs SIGHUPed
+  # [2]  + hangup     caffeinate > /dev/null
+  # Connection to 4.3.2.1 closed.
+  # 
+  # If you use (caffeinate >/dev/null &), then there is no garbage output like
+  # above, and you're not stopped from exiting the shell, but caffeinate is not
+  # sent a SIGHUP and therefore keeps running forever, even after the shell
+  # exits.
+  #
+  # We use true to ignore what the $() interpolates to, otherwise it would get
+  # interpolated as a command. While we make sure that caffeinate does not
+  # produce any output, it's best to make double-sure no output gets
+  # interpolated as a command.
+
+  true $(caffeinate >/dev/null &)
+
+  # However, caffeinate doesn't work when the lid is closed. Instead, we'll use
+  # pmset-session which is pmset with a lockfile mechanism.
+
+  # Note: you need pmset-session to be in $PATH, and .zshrc hasn't been parsed
+  # yet. Therefore, if pmset-session is in e.g. $HOME/bin, add that to $PATH in
+  # .zshenv.
+  
+  pmset_restore () {
+    pmset-session --end-session $$ # Pass the current shell's PID stored in $$
+  }
+  trap pmset_restore SIGINT SIGTERM EXIT # do pmset_restore if shell exits/dies
+  pmset-session --start-session $$
+
+  fi
+END
+}
+
+sub vp($verbose_level, $var) {
+  print $var if $opt->verbose && $opt->verbose >= $verbose_level;
+}
+
+vp(1, 'Mode: ');
+vp(1, $opt->mode);
+vp(1, "\n");
+
+vp(3, 'Verbose: ');
+vp(3, $opt->verbose);
+vp(3, "\n");
+
+vp(3, '$#ARGV: ');
+vp(3, $#ARGV);
+vp(3, "\n");
+
+die "Error: Must provide PID as argument.\n\n" . $usage->text if $#ARGV < 0;
+die "Error: Too many arguments.\n\n" . $usage->text if $#ARGV > 0;
+
+my $pid = shift(@ARGV);
+my $pid_file = $pid_dir . $pid;
+
+vp(1, 'PID: ');
+vp(1, $pid);
+vp(1, "\n");
+
+
+
+
+# Acquire lock
+
+# Note: Do NOT use flock() to unlock the file if you write to the file after
+# acquiring the lock. This could create a race condition. The close() call
+# at the end of the program will unlock the file for you, but only after
+# writing any buffered data.
+
+my $fh; # the file handle to $lockfile
+my $wait_start = 0; # time started waiting for lock (for verbose reporting)
+if($opt->verbose && $opt->verbose >= 2) {
+  $wait_start = time();
+}
+
+sub try_lock($timeout) {
+  # Create timeout mechanism
+  my $alarm = 0;
+  eval {
+    local $SIG{ALRM} = sub {
+      $alarm++;
+      flock($fh, LOCK_UN);
+    };
+    alarm $timeout;
+    # Open the file for appending.
+    open($fh, '>>', $lockfile) or die "Could not open lockfile '$lockfile': $!";
+    
+    # Get exclusive lock (will block until it does)
+    flock($fh, LOCK_EX) or die "Could not lock lockfile '$lockfile': $!";
+    alarm 0;
+  };
+
+  if ($alarm) { return 1; }
+  vp(1, "Lock acquired.\n");
+  return 0;
+}
+
+if (try_lock(1) > 0) {
+  print "Lock acquisition is taking a while. ";
+  print "Waiting up to $max_lock_wait seconds...\n";
+  if (try_lock($max_lock_wait - 1) > 0) {
+    die "Failed to acquire lock in time.";
+  }
+}
+
+if($opt->verbose && $opt->verbose >= 2) {
+  my $wait_end = time();
+  my $wait_period = $wait_end - $wait_start;
+  print "Waited $wait_period" . "s to acquire lock.\n"
+}
+
+
+
+
+# Do stuff you need the lock for, do something with the file, etc...
+
+# Syntax explanation: "given ... when" is just "switch ... case" in Perl
+if("start_session" eq $opt->mode) {
+  open(my $touchfh, ">", $pid_file) or die "Cannot create PID file";
+  close($touchfh) or die "Cannot write PID file";
+  system('sudo pmset -b sleep 0');
+  system('sudo pmset -b disablesleep 1');
+  cleanup();
+} elsif ("end_session" eq $opt->mode) {
+  if ( -e $pid_file ) {
+    if ( -f $pid_file ) {
+      vp(1, "Deleting PID file for PID '$pid'\n");
+      unlink($pid_file) or
+        warn "Could not unlink PID file for PID: '$pid'";
+    } else {
+      warn "PID file is a directory, cannot delete: '$pid_file'";
+    }
+  } else {
+    warn "No existing PID file to be deleted for PID: '$pid'";
+  }
+  if(not cleanup()) {
+    vp(1, "Found no remaining alive PIDs. Resetting sleep options.\n");
+    system('sudo pmset -b sleep 5'); # Restore to 5 minutes
+    system('sudo pmset -b disablesleep 0');
+  }
+} elsif ("clean_up" eq $opt->mode) {
+  cleanup();
+} else {
+  die "Unknown mode: '$opt->mode'\n\n" . $usage->text;
+}
+
+
+
+
+# Delete PID files for processes that are gone and return 1 if any alive
+# processes remain or 0 if no alive processes remain.
+
+sub cleanup {
+  vp(1, "Running cleanup...\n");
+  opendir(my $dh, $pid_dir) or die "Can't opendir() PID dir '$pid_dir': $!";
+
+  # Syntax explanation for the below code:
+  #
+  # my @foo - list declaration
+  # \A - beginning of line
+  # \z - end of line
+  # -f - actually the name of a function that tests if a file exists and is a
+  #      regular file
+  # grep { ... } readdir( ... ) - read a dir that's been opendir()'d and then
+  #                               grep the names of files found
+  # grep { a && b } - check if a and b are true
+  # foreach my $a (@b) { } - iterate over list @b assigning each element to $a
+  #
+  my @found_pids = grep { /\A[0-9]+\z/ && -f $pid_dir . "$_" } readdir($dh);
+  my $alive;
+  my $found_alive = 0; # has a live PID been found?
+  my $full_path;
+  foreach my $found_pid (@found_pids) {
+    $alive = kill(0, $found_pid); # check if process receives signals
+    vp(1, "Found PID: ");
+    vp(1, $found_pid);
+    vp(1, ' (dead)') unless $alive;
+    vp(1, "\n");
+
+    if ($alive) {
+      $found_alive = 1;
+    } else {
+      $full_path = $pid_dir . $found_pid;
+      if (unlink($full_path)) {
+        vp(1, "Deleted PID file: '$found_pid'\n");
+      } else {
+        warn "Can't unlink PID file left by dead process: '$full_path'";
+      }
+    }
+  }
+  return $found_alive;
+}
+
+
+
+
+# Debug / testing: Artificial wait to test locking
+
+while($test_lock_wait > 0){
+
+  print("$test_lock_wait...\n");
+
+  $test_lock_wait--;
+
+  # Pause program for 1 second
+  sleep(1);
+}
+
+
+
+
+# Close the file handle to release the lock
+
+# Note: when buffered I/O is being used, some or all of your data may not be
+# written until close() completes. Always check the return value of close() in
+# case you wrote to the file!
+close($fh) or die "Could not write '$lockfile': $!";
