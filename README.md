@@ -41,7 +41,7 @@ you don't need it to use `pmset-session`:
 
 ```zsh
 # Only execute if logging in via ssh into a mac
-if ! [ -z "$SSH_CLIENT" ] && [[ "$(uname)" == "Darwin" ]]; then
+if ! [ -z "$SSH_CLIENT" ] && [[ "$(uname)" == "Darwin" ]] && [ -z "$ANTISLEEP" ]; then
 
   # We must run $(caffeinate > /dev/null &) because it is the only version of
   # spawning caffeinate in the background that starts up quietly, doesn't
@@ -83,6 +83,7 @@ if ! [ -z "$SSH_CLIENT" ] && [[ "$(uname)" == "Darwin" ]]; then
   trap pmset_restore SIGINT SIGTERM EXIT # do pmset_restore if shell exits/dies
   pmset-session --start-session $$
 
+  export ANTISLEEP=1
   fi
 ```
 
